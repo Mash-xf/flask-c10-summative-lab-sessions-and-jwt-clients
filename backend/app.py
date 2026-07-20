@@ -69,23 +69,29 @@ def create_app(test_config=None):
         db.create_all()
 
     @app.route("/register", methods=["POST"])
+    @app.route("/signup", methods=["POST"])
     def register():
         data = request.get_json(silent=True) or {}
         username = data.get("username", "").strip()
         password = data.get("password", "")
+        password_confirmation = data.get("password_confirmation", "")
 
         if not username or not password:
-            return jsonify({"error": "username and password are required"}), 400
+            return jsonify({"errors": ["username and password are required"]}), 400
+
+        if password != password_confirmation and password_confirmation:
+            return jsonify({"errors": ["passwords do not match"]}), 400
 
         if User.query.filter_by(username=username).first():
-            return jsonify({"error": "username already exists"}), 409
+            return jsonify({"errors": ["username already exists"]}), 409
 
         user = User(username=username)
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
 
-        return jsonify({"message": "User created", "user": {"id": user.id, "username": user.username}}), 201
+        token = create_access_token(identity=str(user.id))
+        return jsonify({"message": "User created", "token": token, "user": {"id": user.id, "username": user.username}}), 201
 
     @app.route("/login", methods=["POST"])
     def login():
@@ -95,10 +101,19 @@ def create_app(test_config=None):
 
         user = User.query.filter_by(username=username).first()
         if not user or not user.check_password(password):
-            return jsonify({"error": "invalid credentials"}), 401
+            return jsonify({"errors": ["invalid credentials"]}), 401
 
         token = create_access_token(identity=str(user.id))
-        return jsonify({"access_token": token, "user": {"id": user.id, "username": user.username}}), 200
+        return jsonify({"access_token": token, "token": token, "user": {"id": user.id, "username": user.username}}), 200
+
+    @app.route("/me", methods=["GET"])
+    @jwt_required()
+    def me():
+        current_user_id = int(get_jwt_identity())
+        user = User.query.get(current_user_id)
+        if not user:
+            return jsonify({"error": "user not found"}), 404
+        return jsonify({"id": user.id, "username": user.username}), 200
 
     @app.route("/notes", methods=["GET"])
     @jwt_required()

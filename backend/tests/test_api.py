@@ -46,6 +46,24 @@ def test_register_and_login_flow(client):
     assert payload["user"]["username"] == "alice"
 
 
+def test_frontend_auth_routes_return_token_and_user(client):
+    signup_res = client.post(
+        "/signup",
+        json={"username": "carol", "password": "secret123", "password_confirmation": "secret123"},
+    )
+    assert signup_res.status_code == 201
+    signup_payload = signup_res.get_json()
+    assert signup_payload["token"]
+    assert signup_payload["user"]["username"] == "carol"
+
+    me_res = client.get(
+        "/me",
+        headers={"Authorization": f"Bearer {signup_payload['token']}"},
+    )
+    assert me_res.status_code == 200
+    assert me_res.get_json()["username"] == "carol"
+
+
 def test_notes_are_scoped_to_the_authenticated_user(client):
     register(client, "alice", "secret123")
     register(client, "bob", "password456")

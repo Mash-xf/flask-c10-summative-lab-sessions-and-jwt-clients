@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import NavBar from "./NavBar";
 import Login from "../pages/Login";
+import Notes from "./Notes";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -20,7 +21,7 @@ function App() {
   const onLogin = (token, user) => {
     localStorage.setItem("token", token);
     setUser(user);
-  }
+  };
 
   if (!user) return <Login onLogin={onLogin} />;
 
@@ -28,7 +29,7 @@ function App() {
     <>
       <NavBar setUser={setUser} />
       <main>
-        <p>You are logged in!</p>
+        <Notes user={user} />
       </main>
     </>
   );
