@@ -49,12 +49,14 @@ class Note(db.Model):
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.update(
-        SECRET_KEY=os.environ.get("SECRET_KEY", "dev-secret-key"),
+        SECRET_KEY=os.environ.get("SECRET_KEY", "dev-secret-key-change-me-in-production"),
         SQLALCHEMY_DATABASE_URI=os.environ.get(
             "DATABASE_URL", f"sqlite:///{os.path.join(basedir, 'app.db')}"
         ),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        JWT_SECRET_KEY=os.environ.get("JWT_SECRET_KEY", "dev-jwt-secret"),
+        JWT_SECRET_KEY=os.environ.get(
+            "JWT_SECRET_KEY", "super-secret-jwt-key-change-me-in-production-please"
+        ),
     )
 
     if test_config:
@@ -95,13 +97,13 @@ def create_app(test_config=None):
         if not user or not user.check_password(password):
             return jsonify({"error": "invalid credentials"}), 401
 
-        token = create_access_token(identity=user.id)
+        token = create_access_token(identity=str(user.id))
         return jsonify({"access_token": token, "user": {"id": user.id, "username": user.username}}), 200
 
     @app.route("/notes", methods=["GET"])
     @jwt_required()
     def list_notes():
-        current_user_id = get_jwt_identity()
+        current_user_id = int(get_jwt_identity())
         page = request.args.get("page", 1, type=int)
         per_page = request.args.get("per_page", 10, type=int)
         page = max(page, 1)
@@ -125,7 +127,7 @@ def create_app(test_config=None):
     @app.route("/notes", methods=["POST"])
     @jwt_required()
     def create_note():
-        current_user_id = get_jwt_identity()
+        current_user_id = int(get_jwt_identity())
         data = request.get_json(silent=True) or {}
         title = data.get("title", "").strip()
         content = data.get("content", "").strip()
@@ -141,7 +143,7 @@ def create_app(test_config=None):
     @app.route("/notes/<int:note_id>", methods=["GET"])
     @jwt_required()
     def get_note(note_id):
-        current_user_id = get_jwt_identity()
+        current_user_id = int(get_jwt_identity())
         note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
         if not note:
             return jsonify({"error": "note not found"}), 404
@@ -150,7 +152,7 @@ def create_app(test_config=None):
     @app.route("/notes/<int:note_id>", methods=["PATCH"])
     @jwt_required()
     def update_note(note_id):
-        current_user_id = get_jwt_identity()
+        current_user_id = int(get_jwt_identity())
         note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
         if not note:
             return jsonify({"error": "note not found"}), 404
@@ -167,7 +169,7 @@ def create_app(test_config=None):
     @app.route("/notes/<int:note_id>", methods=["DELETE"])
     @jwt_required()
     def delete_note(note_id):
-        current_user_id = get_jwt_identity()
+        current_user_id = int(get_jwt_identity())
         note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
         if not note:
             return jsonify({"error": "note not found"}), 404
