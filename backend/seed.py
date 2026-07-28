@@ -1,3 +1,13 @@
+"""
+seed.py — populate the database with sample data
+
+Creates two users (alice and bob) and three notes for manual testing.
+Drops and recreates all tables on every run, so it is safe to re-run
+against a development database but should never be run in production.
+
+Usage (from the repo root):
+    python -m backend.seed
+"""
 from backend.app import create_app, db
 from backend.models import User, Note
 
@@ -5,6 +15,7 @@ from backend.models import User, Note
 def seed_data():
     app = create_app()
     with app.app_context():
+        # Wipe existing data so the seed is idempotent across re-runs.
         db.drop_all()
         db.create_all()
 
