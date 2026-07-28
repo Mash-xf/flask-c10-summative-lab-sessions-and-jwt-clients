@@ -55,7 +55,7 @@ class MeResource(Resource):
     @jwt_required()
     def get(self):
         current_user_id = int(get_jwt_identity())
-        user = User.query.get(current_user_id)
+        user = db.session.get(User, current_user_id)
         if not user:
             return {"error": "user not found"}, 404
         return {"id": user.id, "username": user.username}, 200

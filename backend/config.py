@@ -9,4 +9,4 @@ class Config:
         "DATABASE_URL", f"sqlite:///{os.path.join(basedir, 'app.db')}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "super-secret-jwt-key-change-me")
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "super-secret-jwt-key-change-me-32b")
