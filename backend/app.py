@@ -1,15 +1,18 @@
+import os
+
 from flask import Flask
 from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
 from flask_restful import Api
 
 from backend.config import Config
-from backend.models import db, bcrypt
+from backend.models import db, bcrypt  # noqa: F401 — re-exported for tests
 from backend.routes import register_resources
 
 
-migrate = Migrate()
 jwt = JWTManager()
+
+MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "migrations")
 
 
 def create_app(test_config=None):
@@ -22,7 +25,7 @@ def create_app(test_config=None):
     db.init_app(app)
     bcrypt.init_app(app)
     jwt.init_app(app)
-    migrate.init_app(app, db)
+    Migrate(app, db, directory=MIGRATIONS_DIR)
 
     api = Api(app)
     register_resources(api)
