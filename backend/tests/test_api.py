@@ -1,7 +1,14 @@
 """
-Auth flow and API contract tests.
+test_api.py — API contract and auth-flow tests
 
-The `client` fixture is provided automatically by conftest.py.
+Covers every requirement from the summative lab spec:
+  - Correct HTTP status codes for success and error cases
+  - JWT auth: missing token → 401, malformed token → 422
+  - Input validation: missing fields → 400, duplicate username → 409
+  - Route protection: all notes endpoints require a valid token
+  - Data isolation: users can only access their own notes
+
+The `client` fixture is injected automatically from conftest.py.
 Helper functions are imported explicitly below.
 """
 from backend.tests.conftest import auth_headers, get_token, login, register
@@ -57,7 +64,7 @@ def test_login_returns_200_with_token_and_user(client):
     assert res.status_code == 200
     body = res.get_json()
     assert body["access_token"]
-    assert body["token"]                      # frontend alias
+    assert body["token"]                      # alias read by the React frontend
     assert body["user"]["username"] == "alice"
 
 
@@ -88,12 +95,13 @@ def test_me_without_token_returns_401(client):
     assert res.status_code == 401
 
 
-def test_me_with_invalid_token_returns_401(client):
+def test_me_with_invalid_token_returns_422(client):
+    # Flask-JWT-Extended returns 422 when the token is structurally invalid.
     res = client.get("/me", headers={"Authorization": "Bearer not.a.real.token"})
     assert res.status_code == 422
 
 
-# ── /signup alias (frontend route) ───────────────────────────────────────────
+# ── /signup alias (used by the React SignUpForm component) ────────────────────
 
 def test_signup_alias_returns_token_and_user(client):
     res = client.post(
@@ -113,26 +121,22 @@ def test_signup_alias_returns_token_and_user(client):
 # ── Notes — unauthenticated access ───────────────────────────────────────────
 
 def test_get_notes_without_token_returns_401(client):
-    res = client.get("/notes")
-    assert res.status_code == 401
+    assert client.get("/notes").status_code == 401
 
 
 def test_post_note_without_token_returns_401(client):
-    res = client.post("/notes", json={"title": "T", "content": "C"})
-    assert res.status_code == 401
+    assert client.post("/notes", json={"title": "T", "content": "C"}).status_code == 401
 
 
 def test_patch_note_without_token_returns_401(client):
-    res = client.patch("/notes/1", json={"title": "T"})
-    assert res.status_code == 401
+    assert client.patch("/notes/1", json={"title": "T"}).status_code == 401
 
 
 def test_delete_note_without_token_returns_401(client):
-    res = client.delete("/notes/1")
-    assert res.status_code == 401
+    assert client.delete("/notes/1").status_code == 401
 
 
-# ── Notes — validation ────────────────────────────────────────────────────────
+# ── Notes — input validation ──────────────────────────────────────────────────
 
 def test_create_note_missing_title_returns_400(client):
     token = get_token(client)
@@ -162,7 +166,7 @@ def test_notes_full_crud_and_pagination(client):
     token = get_token(client)
     headers = auth_headers(token)
 
-    # Create 3 notes
+    # Create 3 notes and verify each response.
     for i in range(3):
         res = client.post(
             "/notes",
@@ -175,7 +179,7 @@ def test_notes_full_crud_and_pagination(client):
         assert body["content"] == f"Body {i}"
         assert "user_id" in body
 
-    # Paginated list — page 1 of 2
+    # Page 1 of 2 — expects exactly 2 items out of 3 total.
     page = client.get("/notes?page=1&per_page=2", headers=headers)
     assert page.status_code == 200
     payload = page.get_json()
@@ -187,29 +191,28 @@ def test_notes_full_crud_and_pagination(client):
 
     note_id = payload["items"][0]["id"]
 
-    # Read single note
+    # Read single note.
     get_res = client.get(f"/notes/{note_id}", headers=headers)
     assert get_res.status_code == 200
     assert get_res.get_json()["id"] == note_id
 
-    # Update
+    # Partial update — only content changes.
     patch_res = client.patch(
         f"/notes/{note_id}", json={"content": "Updated"}, headers=headers
     )
     assert patch_res.status_code == 200
     assert patch_res.get_json()["content"] == "Updated"
 
-    # Delete
+    # Delete and confirm the record is gone.
     del_res = client.delete(f"/notes/{note_id}", headers=headers)
     assert del_res.status_code == 200
     assert del_res.get_json()["message"] == "Note deleted"
 
-    # Confirm gone
     gone = client.get(f"/notes/{note_id}", headers=headers)
     assert gone.status_code == 404
 
 
-# ── Notes — cross-user isolation ─────────────────────────────────────────────
+# ── Notes — cross-user data isolation ────────────────────────────────────────
 
 def test_notes_scoped_to_owner(client):
     """Bob's list must be empty even after Alice creates a note."""
@@ -230,6 +233,10 @@ def test_notes_scoped_to_owner(client):
 
 
 def test_user_cannot_read_update_or_delete_another_users_note(client):
+    """
+    Bob must receive 404 on all operations against Alice's note.
+    404 is used instead of 403 to avoid revealing that the record exists.
+    """
     register(client, "alice", "secret123")
     register(client, "bob", "password456")
     alice_token = login(client, "alice", "secret123").get_json()["access_token"]
