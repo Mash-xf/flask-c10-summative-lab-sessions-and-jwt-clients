@@ -1,138 +1,239 @@
-import pytest
+"""
+Auth flow and API contract tests.
 
-from backend.app import create_app, db
-
-
-@pytest.fixture()
-def client():
-    app = create_app({
-        "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-        "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-    })
-    with app.test_client() as client:
-        with app.app_context():
-            db.drop_all()
-            db.create_all()
-        yield client
+The `client` fixture is provided automatically by conftest.py.
+Helper functions are imported explicitly below.
+"""
+from backend.tests.conftest import auth_headers, get_token, login, register
 
 
-def register(client, username="alice", password="secret123"):
-    return client.post(
-        "/register",
-        json={"username": username, "password": password},
-    )
+# ── Registration ──────────────────────────────────────────────────────────────
+
+def test_register_returns_201_with_token_and_user(client):
+    res = register(client)
+    assert res.status_code == 201
+    body = res.get_json()
+    assert body["token"]
+    assert body["user"]["username"] == "alice"
 
 
-def login(client, username="alice", password="secret123"):
-    return client.post(
-        "/login",
-        json={"username": username, "password": password},
-    )
+def test_register_missing_username_returns_400(client):
+    res = client.post("/register", json={"password": "secret123"})
+    assert res.status_code == 400
+    assert res.get_json()["errors"]
 
 
-def auth_headers(token):
-    return {"Authorization": f"Bearer {token}"}
+def test_register_missing_password_returns_400(client):
+    res = client.post("/register", json={"username": "alice"})
+    assert res.status_code == 400
+    assert res.get_json()["errors"]
 
 
-def test_register_and_login_flow(client):
-    reg = register(client)
-    assert reg.status_code == 201
-
-    login_res = login(client)
-    assert login_res.status_code == 200
-    payload = login_res.get_json()
-    assert payload["access_token"]
-    assert payload["user"]["username"] == "alice"
-
-
-def test_frontend_auth_routes_return_token_and_user(client):
-    signup_res = client.post(
+def test_register_password_mismatch_returns_400(client):
+    res = client.post(
         "/signup",
-        json={"username": "carol", "password": "secret123", "password_confirmation": "secret123"},
+        json={
+            "username": "alice",
+            "password": "secret123",
+            "password_confirmation": "wrong",
+        },
     )
-    assert signup_res.status_code == 201
-    signup_payload = signup_res.get_json()
-    assert signup_payload["token"]
-    assert signup_payload["user"]["username"] == "carol"
+    assert res.status_code == 400
+    assert "passwords do not match" in res.get_json()["errors"]
 
-    me_res = client.get(
-        "/me",
-        headers={"Authorization": f"Bearer {signup_payload['token']}"},
+
+def test_register_duplicate_username_returns_409(client):
+    register(client)
+    res = register(client)
+    assert res.status_code == 409
+    assert res.get_json()["errors"]
+
+
+# ── Login ─────────────────────────────────────────────────────────────────────
+
+def test_login_returns_200_with_token_and_user(client):
+    register(client)
+    res = login(client)
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["access_token"]
+    assert body["token"]                      # frontend alias
+    assert body["user"]["username"] == "alice"
+
+
+def test_login_wrong_password_returns_401(client):
+    register(client)
+    res = login(client, password="wrongpassword")
+    assert res.status_code == 401
+    assert res.get_json()["errors"]
+
+
+def test_login_unknown_user_returns_401(client):
+    res = login(client, username="nobody")
+    assert res.status_code == 401
+    assert res.get_json()["errors"]
+
+
+# ── /me ───────────────────────────────────────────────────────────────────────
+
+def test_me_returns_current_user(client):
+    token = get_token(client)
+    res = client.get("/me", headers=auth_headers(token))
+    assert res.status_code == 200
+    assert res.get_json()["username"] == "alice"
+
+
+def test_me_without_token_returns_401(client):
+    res = client.get("/me")
+    assert res.status_code == 401
+
+
+def test_me_with_invalid_token_returns_401(client):
+    res = client.get("/me", headers={"Authorization": "Bearer not.a.real.token"})
+    assert res.status_code == 422
+
+
+# ── /signup alias (frontend route) ───────────────────────────────────────────
+
+def test_signup_alias_returns_token_and_user(client):
+    res = client.post(
+        "/signup",
+        json={
+            "username": "carol",
+            "password": "secret123",
+            "password_confirmation": "secret123",
+        },
     )
-    assert me_res.status_code == 200
-    assert me_res.get_json()["username"] == "carol"
+    assert res.status_code == 201
+    body = res.get_json()
+    assert body["token"]
+    assert body["user"]["username"] == "carol"
 
 
-def test_notes_are_scoped_to_the_authenticated_user(client):
-    register(client, "alice", "secret123")
-    register(client, "bob", "password456")
+# ── Notes — unauthenticated access ───────────────────────────────────────────
 
-    alice_login = login(client, "alice", "secret123")
-    bob_login = login(client, "bob", "password456")
-    alice_token = alice_login.get_json()["access_token"]
-    bob_token = bob_login.get_json()["access_token"]
+def test_get_notes_without_token_returns_401(client):
+    res = client.get("/notes")
+    assert res.status_code == 401
 
-    create_note = client.post(
+
+def test_post_note_without_token_returns_401(client):
+    res = client.post("/notes", json={"title": "T", "content": "C"})
+    assert res.status_code == 401
+
+
+def test_patch_note_without_token_returns_401(client):
+    res = client.patch("/notes/1", json={"title": "T"})
+    assert res.status_code == 401
+
+
+def test_delete_note_without_token_returns_401(client):
+    res = client.delete("/notes/1")
+    assert res.status_code == 401
+
+
+# ── Notes — validation ────────────────────────────────────────────────────────
+
+def test_create_note_missing_title_returns_400(client):
+    token = get_token(client)
+    res = client.post(
         "/notes",
-        json={"title": "Alpha", "content": "First note"},
-        headers=auth_headers(alice_token),
+        json={"content": "no title here"},
+        headers=auth_headers(token),
     )
-    assert create_note.status_code == 201
-
-    list_res = client.get("/notes", headers=auth_headers(bob_token))
-    assert list_res.status_code == 200
-    items = list_res.get_json()["items"]
-    assert items == []
+    assert res.status_code == 400
+    assert res.get_json()["error"]
 
 
-def test_notes_support_crud_and_pagination(client):
-    register(client, "alice", "secret123")
-    login_res = login(client, "alice", "secret123")
-    token = login_res.get_json()["access_token"]
+def test_create_note_missing_content_returns_400(client):
+    token = get_token(client)
+    res = client.post(
+        "/notes",
+        json={"title": "no content here"},
+        headers=auth_headers(token),
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"]
+
+
+# ── Notes — full CRUD + pagination ───────────────────────────────────────────
+
+def test_notes_full_crud_and_pagination(client):
+    token = get_token(client)
     headers = auth_headers(token)
 
+    # Create 3 notes
     for i in range(3):
-        create_res = client.post(
+        res = client.post(
             "/notes",
             json={"title": f"Note {i}", "content": f"Body {i}"},
             headers=headers,
         )
-        assert create_res.status_code == 201
+        assert res.status_code == 201
+        body = res.get_json()
+        assert body["title"] == f"Note {i}"
+        assert body["content"] == f"Body {i}"
+        assert "user_id" in body
 
-    page_one = client.get("/notes?page=1&per_page=2", headers=headers)
-    assert page_one.status_code == 200
-    payload = page_one.get_json()
+    # Paginated list — page 1 of 2
+    page = client.get("/notes?page=1&per_page=2", headers=headers)
+    assert page.status_code == 200
+    payload = page.get_json()
     assert payload["page"] == 1
     assert payload["per_page"] == 2
     assert len(payload["items"]) == 2
     assert payload["total"] == 3
+    assert payload["pages"] == 2
 
-    created_id = payload["items"][0]["id"]
-    update_res = client.patch(
-        f"/notes/{created_id}",
-        json={"content": "Updated"},
-        headers=headers,
+    note_id = payload["items"][0]["id"]
+
+    # Read single note
+    get_res = client.get(f"/notes/{note_id}", headers=headers)
+    assert get_res.status_code == 200
+    assert get_res.get_json()["id"] == note_id
+
+    # Update
+    patch_res = client.patch(
+        f"/notes/{note_id}", json={"content": "Updated"}, headers=headers
     )
-    assert update_res.status_code == 200
-    assert update_res.get_json()["content"] == "Updated"
+    assert patch_res.status_code == 200
+    assert patch_res.get_json()["content"] == "Updated"
 
-    delete_res = client.delete(f"/notes/{created_id}", headers=headers)
-    assert delete_res.status_code == 200
-    assert delete_res.get_json()["message"] == "Note deleted"
+    # Delete
+    del_res = client.delete(f"/notes/{note_id}", headers=headers)
+    assert del_res.status_code == 200
+    assert del_res.get_json()["message"] == "Note deleted"
 
-    fetch_res = client.get(f"/notes/{created_id}", headers=headers)
-    assert fetch_res.status_code == 404
+    # Confirm gone
+    gone = client.get(f"/notes/{note_id}", headers=headers)
+    assert gone.status_code == 404
 
 
-def test_user_cannot_access_another_users_note(client):
+# ── Notes — cross-user isolation ─────────────────────────────────────────────
+
+def test_notes_scoped_to_owner(client):
+    """Bob's list must be empty even after Alice creates a note."""
     register(client, "alice", "secret123")
     register(client, "bob", "password456")
+    alice_token = login(client, "alice", "secret123").get_json()["access_token"]
+    bob_token = login(client, "bob", "password456").get_json()["access_token"]
 
-    alice_login = login(client, "alice", "secret123")
-    bob_login = login(client, "bob", "password456")
-    alice_token = alice_login.get_json()["access_token"]
-    bob_token = bob_login.get_json()["access_token"]
+    client.post(
+        "/notes",
+        json={"title": "Alice's note", "content": "private"},
+        headers=auth_headers(alice_token),
+    )
+
+    bob_list = client.get("/notes", headers=auth_headers(bob_token))
+    assert bob_list.status_code == 200
+    assert bob_list.get_json()["items"] == []
+
+
+def test_user_cannot_read_update_or_delete_another_users_note(client):
+    register(client, "alice", "secret123")
+    register(client, "bob", "password456")
+    alice_token = login(client, "alice", "secret123").get_json()["access_token"]
+    bob_token = login(client, "bob", "password456").get_json()["access_token"]
 
     create_res = client.post(
         "/notes",
@@ -141,15 +242,16 @@ def test_user_cannot_access_another_users_note(client):
     )
     note_id = create_res.get_json()["id"]
 
-    forbidden_get = client.get(f"/notes/{note_id}", headers=auth_headers(bob_token))
-    assert forbidden_get.status_code == 404
+    assert client.get(
+        f"/notes/{note_id}", headers=auth_headers(bob_token)
+    ).status_code == 404
 
-    forbidden_patch = client.patch(
+    assert client.patch(
         f"/notes/{note_id}",
-        json={"content": "Nope"},
+        json={"content": "Hacked"},
         headers=auth_headers(bob_token),
-    )
-    assert forbidden_patch.status_code == 404
+    ).status_code == 404
 
-    forbidden_delete = client.delete(f"/notes/{note_id}", headers=auth_headers(bob_token))
-    assert forbidden_delete.status_code == 404
+    assert client.delete(
+        f"/notes/{note_id}", headers=auth_headers(bob_token)
+    ).status_code == 404
