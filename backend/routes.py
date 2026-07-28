@@ -1,4 +1,16 @@
-from flask import jsonify, request
+"""
+routes.py — Flask-RESTful resource classes and route registration
+
+Auth endpoints  : /register  /signup  /login  /me
+Notes endpoints : /notes  /notes/<id>
+
+All notes endpoints require a valid JWT in the Authorization header:
+    Authorization: Bearer <token>
+
+Users can only read or modify their own notes. Accessing another user's
+note returns 404 (rather than 403) to avoid leaking record existence.
+"""
+from flask import request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 from flask_restful import Resource
 
@@ -6,6 +18,8 @@ from backend.models import User, Note, db
 
 
 class RegisterResource(Resource):
+    """Handle new user registration at POST /register and POST /signup."""
+
     def post(self):
         data = request.get_json(silent=True) or {}
         username = data.get("username", "").strip()
@@ -15,7 +29,9 @@ class RegisterResource(Resource):
         if not username or not password:
             return {"errors": ["username and password are required"]}, 400
 
-        if password != password_confirmation and password_confirmation:
+        # Only validate confirmation when the client actually sends it
+        # (the /signup frontend route always sends it; /register may not).
+        if password_confirmation and password != password_confirmation:
             return {"errors": ["passwords do not match"]}, 400
 
         if User.query.filter_by(username=username).first():
@@ -30,6 +46,7 @@ class RegisterResource(Resource):
         return (
             {
                 "message": "User created",
+                # "token" is the key the React frontend reads on signup.
                 "token": token,
                 "user": {"id": user.id, "username": user.username},
             },
@@ -38,6 +55,8 @@ class RegisterResource(Resource):
 
 
 class LoginResource(Resource):
+    """Authenticate an existing user at POST /login."""
+
     def post(self):
         data = request.get_json(silent=True) or {}
         username = data.get("username", "").strip()
@@ -48,10 +67,21 @@ class LoginResource(Resource):
             return {"errors": ["invalid credentials"]}, 401
 
         token = create_access_token(identity=str(user.id))
-        return {"access_token": token, "token": token, "user": {"id": user.id, "username": user.username}}, 200
+        return (
+            {
+                # "access_token" is the standard JWT key; "token" is the alias
+                # the React frontend reads after login.
+                "access_token": token,
+                "token": token,
+                "user": {"id": user.id, "username": user.username},
+            },
+            200,
+        )
 
 
 class MeResource(Resource):
+    """Return the currently authenticated user at GET /me."""
+
     @jwt_required()
     def get(self):
         current_user_id = int(get_jwt_identity())
@@ -62,13 +92,20 @@ class MeResource(Resource):
 
 
 class NoteListResource(Resource):
+    """
+    Collection endpoint for the authenticated user's notes.
+
+    GET  /notes          — paginated list (query params: page, per_page)
+    POST /notes          — create a new note
+    """
+
     @jwt_required()
     def get(self):
         current_user_id = int(get_jwt_identity())
-        page = request.args.get("page", 1, type=int)
-        per_page = request.args.get("per_page", 10, type=int)
-        page = max(page, 1)
-        per_page = min(max(per_page, 1), 100)
+
+        # Clamp page and per_page to safe ranges.
+        page = max(request.args.get("page", 1, type=int), 1)
+        per_page = min(max(request.args.get("per_page", 10, type=int), 1), 100)
 
         pagination = (
             Note.query.filter_by(user_id=current_user_id)
@@ -100,18 +137,33 @@ class NoteListResource(Resource):
 
 
 class NoteResource(Resource):
+    """
+    Single-note endpoint for the authenticated user.
+
+    GET    /notes/<id>   — fetch one note
+    PATCH  /notes/<id>   — update title and/or content
+    DELETE /notes/<id>   — delete the note
+    """
+
+    def _get_owned_note(self, note_id):
+        """
+        Return the note only if it exists and belongs to the current user.
+        Returns None when the note is missing or owned by someone else,
+        which causes the caller to respond with 404.
+        """
+        current_user_id = int(get_jwt_identity())
+        return Note.query.filter_by(id=note_id, user_id=current_user_id).first()
+
     @jwt_required()
     def get(self, note_id):
-        current_user_id = int(get_jwt_identity())
-        note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
+        note = self._get_owned_note(note_id)
         if not note:
             return {"error": "note not found"}, 404
         return note.to_dict(), 200
 
     @jwt_required()
     def patch(self, note_id):
-        current_user_id = int(get_jwt_identity())
-        note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
+        note = self._get_owned_note(note_id)
         if not note:
             return {"error": "note not found"}, 404
 
@@ -126,8 +178,7 @@ class NoteResource(Resource):
 
     @jwt_required()
     def delete(self, note_id):
-        current_user_id = int(get_jwt_identity())
-        note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
+        note = self._get_owned_note(note_id)
         if not note:
             return {"error": "note not found"}, 404
 
@@ -137,6 +188,7 @@ class NoteResource(Resource):
 
 
 def register_resources(api):
+    """Bind all resource classes to their URL rules."""
     api.add_resource(RegisterResource, "/register", "/signup")
     api.add_resource(LoginResource, "/login")
     api.add_resource(MeResource, "/me")
